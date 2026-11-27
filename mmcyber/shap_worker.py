@@ -86,7 +86,7 @@ def run_worker(payload_path: str | Path, result_path: str | Path) -> None:
     value_rows = []
     for class_idx, class_name in enumerate(class_names):
         mean_abs = np.abs(class_first_values[class_idx]).mean(axis=0)
-        top_idx = np.argsort(mean_abs)[::-1][:50]
+        top_idx = np.argsort(mean_abs)[::-1]  # retain complete importance ranking
         for rank, feature_idx in enumerate(top_idx, start=1):
             summary_rows.append(
                 {

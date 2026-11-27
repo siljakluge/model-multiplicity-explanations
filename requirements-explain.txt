@@ -1,0 +1,4 @@
+# Optional explanation methods; for development from the repository root:
+# pip install -e '.[explain]'
+captum>=0.7
+lime>=0.2.0.1

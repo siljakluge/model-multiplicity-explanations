@@ -1,4 +1,4 @@
-"""Non-training server preflight checks for the full five-dataset run."""
+"""Preflight checks for the general tabular benchmarks (no IDS datasets)."""
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -11,14 +11,19 @@ from mmcyber.utils import load_config
 
 
 FULL_CONFIGS = (
-    Path("configs/default.yaml"),
     Path("configs/folktables_income_full.yaml"),
     Path("configs/folktables_employment_full.yaml"),
     Path("configs/adult_full.yaml"),
     Path("configs/bank_marketing_full.yaml"),
+    Path("configs/compas_full.yaml"),
+    Path("configs/german_credit_full.yaml"),
+    Path("configs/taiwan_credit_full.yaml"),
+    Path("configs/breast_cancer_full.yaml"),
 )
-EXPECTED_DATASETS = ("nsl_kdd", "ACSIncome", "ACSEmployment", "adult", "bank_marketing")
-
+EXPECTED_DATASETS = (
+    "ACSIncome", "ACSEmployment", "adult", "bank_marketing",
+    "compas", "german_credit", "taiwan_credit", "breast_cancer",
+)
 
 def _validate_prepared_data(data: PreparedData, label: str) -> None:
     if not data.feature_names:
@@ -76,5 +81,5 @@ def preflight_full_configs(config_paths: Iterable[str | Path] = FULL_CONFIGS) ->
 
     if tuple(labels) != EXPECTED_DATASETS:
         raise ValueError(f"Expected full dataset order {EXPECTED_DATASETS!r}, got {tuple(labels)!r}.")
-    print("Preflight passed: all five datasets are cached or downloadable and all 3,150 planned models are valid.")
+    print(f"Preflight passed: {len(paths)} datasets, {len(paths) * 10 * 63} model instances planned.")
     return labels
