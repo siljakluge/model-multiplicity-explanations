@@ -9,6 +9,7 @@ from mmcyber.reevaluate import reconstruct_validation_metrics
 from mmcyber.plotting import plot_all
 from mmcyber.preflight import preflight_full_configs
 from mmcyber.shap_analysis import compute_shap
+from mmcyber.method_comparison import compute_method_comparison
 from mmcyber.train import run_training
 from mmcyber.utils import load_config
 
@@ -51,7 +52,11 @@ def main() -> None:
     all_parser.add_argument("--max-background", type=int, default=128)
     all_parser.add_argument("--max-explain", type=int, default=256)
     all_parser.add_argument("--only-conflicts", action="store_true")
-    all_parser.add_argument("--top-k", type=int, default=20)
+    all_parser.add_argument("--top-k", type=int, default=None,
+                            help="Fixed number of features (overrides --top-k-fraction)")
+    all_parser.add_argument("--top-k-fraction", type=float, default=0.10)
+    all_parser.add_argument("--plot-profile", choices=["none", "paper", "rankings", "full"], default="none")
+    all_parser.add_argument("--plot-top-n", type=int, default=8)
     all_parser.add_argument("--aggregate-out-dir")
 
     disagree_parser = subparsers.add_parser("disagree")
@@ -67,13 +72,15 @@ def main() -> None:
 
     explain_disagree_parser = subparsers.add_parser("explain-disagree")
     explain_disagree_parser.add_argument("--run-dir", required=True)
-    explain_disagree_parser.add_argument("--top-k", type=int, default=20)
+    explain_disagree_parser.add_argument("--top-k", type=int, default=None)
+    explain_disagree_parser.add_argument("--top-k-fraction", type=float, default=0.10)
 
     plot_parser = subparsers.add_parser("plot")
     plot_parser.add_argument("--run-dir", required=True)
     plot_parser.add_argument("--out-dir")
     plot_parser.add_argument("--top-n", type=int, default=20)
     plot_parser.add_argument("--paper-dir")
+    plot_parser.add_argument("--profile", choices=["none", "paper", "rankings", "full"], default="paper")
 
     aggregate_parser = subparsers.add_parser("aggregate")
     aggregate_parser.add_argument("--run-dirs", nargs="+", required=True)
@@ -85,6 +92,22 @@ def main() -> None:
     reevaluate_parser.add_argument("--run-dir", required=True)
     reevaluate_parser.add_argument("--batch-size", type=int, default=1024)
     reevaluate_parser.add_argument("--device", default="auto")
+
+    multi_parser = subparsers.add_parser(
+        "multi-explain", help="Compare SHAP margin, Integrated Gradients and LIME"
+    )
+    multi_parser.add_argument("--run-dir", required=True)
+    multi_parser.add_argument("--methods", nargs="+", choices=["shap", "ig", "lime"],
+                              default=["shap", "ig", "lime"])
+    multi_parser.add_argument("--max-models", type=int)
+    multi_parser.add_argument("--max-samples", type=int, default=64)
+    multi_parser.add_argument("--device", default="cpu")
+    multi_parser.add_argument("--ig-steps", type=int, default=64)
+    multi_parser.add_argument("--ig-batch", type=int, default=16)
+    multi_parser.add_argument("--lime-samples", type=int, default=1000)
+    multi_parser.add_argument("--lime-reference-size", type=int, default=2000)
+    multi_parser.add_argument("--random-state", type=int, default=42)
+    multi_parser.add_argument("--overwrite", action="store_true")
 
     subparsers.add_parser(
         "preflight",
@@ -118,8 +141,11 @@ def main() -> None:
             compute_disagreement(run_dir, rashomon_tolerance=args.rashomon_tolerance)
             compute_shap(run_dir, max_background=args.max_background,
                          max_explain=args.max_explain, only_conflicts=args.only_conflicts)
-            compute_explanation_disagreement(run_dir, top_k=args.top_k)
-            plot_all(run_dir, top_n=args.top_k)
+            compute_explanation_disagreement(
+                run_dir, top_k=args.top_k, top_fraction=args.top_k_fraction
+            )
+            if args.plot_profile != "none":
+                plot_all(run_dir, top_n=args.plot_top_n, profile=args.plot_profile)
             run_dirs.append(run_dir)
         if args.aggregate_out_dir:
             aggregate_runs(run_dirs, args.aggregate_out_dir)
@@ -137,13 +163,25 @@ def main() -> None:
             only_conflicts=args.only_conflicts,
         )
     elif args.command == "explain-disagree":
-        compute_explanation_disagreement(args.run_dir, top_k=args.top_k)
+        compute_explanation_disagreement(
+            args.run_dir, top_k=args.top_k, top_fraction=args.top_k_fraction
+        )
     elif args.command == "plot":
-        plot_all(args.run_dir, out_dir=args.out_dir, top_n=args.top_n, paper_dir=args.paper_dir)
+        plot_all(args.run_dir, out_dir=args.out_dir, top_n=args.top_n,
+                 paper_dir=args.paper_dir, profile=args.profile)
     elif args.command == "aggregate":
         aggregate_runs(args.run_dirs, args.out_dir, n_bootstrap=args.n_bootstrap, seed=args.seed)
     elif args.command == "reevaluate":
         reconstruct_validation_metrics(args.run_dir, batch_size=args.batch_size, device_name=args.device)
+    elif args.command == "multi-explain":
+        output = compute_method_comparison(
+            args.run_dir, methods=tuple(args.methods), max_models=args.max_models,
+            max_samples=args.max_samples, device=args.device, ig_steps=args.ig_steps,
+            ig_batch=args.ig_batch, lime_samples=args.lime_samples,
+            lime_reference_size=args.lime_reference_size,
+            random_state=args.random_state, overwrite=args.overwrite,
+        )
+        print(f"Method attributions written to {output}")
     elif args.command == "preflight":
         preflight_full_configs()
 

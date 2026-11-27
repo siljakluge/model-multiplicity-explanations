@@ -68,6 +68,8 @@ def export_paper_figures(run_dir: str | Path, out_dir: str | Path | None = None,
         return
 
     figure_map = {
+        "ba_feature_ranking_positive.pdf": "results_feature_ranking_positive.pdf",
+        "ba_feature_ranking_negative.pdf": "results_feature_ranking_negative.pdf",
         "metrics_by_model.pdf": "results_metrics_by_model.pdf",
         "macro_f1_by_subset.pdf": "results_macro_f1_by_subset.pdf",
         "macro_f1_by_architecture.pdf": "results_macro_f1_by_architecture.pdf",
@@ -633,15 +635,115 @@ def plot_ba_correlation_matrices(
         plt.close(fig)
 
 
+def plot_ba_feature_rankings_from_summary(
+    run_dir: str | Path,
+    out_dir: str | Path | None = None,
+    top_n: int = 8,
+) -> None:
+    """Plot actual, full-feature SHAP ranks without reading huge SHAP-value CSVs.
+
+    Same box/strip visual and ba_feature_ranking_<class> filenames as the
+    original Bachelor-thesis plots, but ranks are taken from the full feature
+    inventory, rather than re-ranking only the selected plotted features.
+    """
+    if top_n < 1:
+        raise ValueError("top_n must be >= 1")
+    run_path = Path(run_dir)
+    summary = _optional_csv(run_path, "shap_summary.csv")
+    if summary is None or summary.empty:
+        return
+    required = {"class_name", "model_id", "feature", "mean_abs_shap", "rank"}
+    if not required.issubset(summary.columns):
+        raise ValueError(f"shap_summary.csv missing {sorted(required - set(summary.columns))}")
+    membership = _optional_csv(run_path, "rashomon_models.csv")
+    if membership is not None:
+        summary = summary[summary["model_id"].isin(set(membership["model_id"].astype(str)))].copy()
+    if summary.empty:
+        return
+    inventory = _optional_csv(run_path, "feature_names.csv")
+    if inventory is not None:
+        n_features = len(inventory)
+        smallest = int(summary.groupby(["class_name", "model_id"]).size().min())
+        if smallest < n_features:
+            print(f"WARNING: SHAP summary has only {smallest}/{n_features} feature ranks "
+                  "for some models; regenerate full SHAP summaries for exact rankings.")
+    plt, sns = _setup_matplotlib()
+    out_path = Path(out_dir) if out_dir else run_path / "plots"
+    grouped_classes = list(summary.groupby("class_name"))
+    sanitized = [_safe_name(label) for label, _ in grouped_classes]
+    for class_index, (class_name, class_frame) in enumerate(grouped_classes):
+        slug = _safe_name(class_name)
+        if sanitized.count(slug) > 1:
+            slug = f"class{class_index}_{slug}"
+        feature_order = (
+            class_frame.groupby("feature")["mean_abs_shap"]
+            .mean().sort_values(ascending=False).head(top_n).index.tolist()
+        )
+        plot_frame = class_frame.loc[
+            class_frame["feature"].isin(feature_order),
+            ["model_id", "feature", "rank"],
+        ].copy()
+        if plot_frame.empty:
+            continue
+        fig, ax = plt.subplots(figsize=(max(8, len(feature_order) * 0.55), 5.2))
+        sns.boxplot(data=plot_frame, x="feature", y="rank", order=feature_order,
+                    width=0.7, showfliers=False, ax=ax)
+        sns.stripplot(data=plot_frame, x="feature", y="rank", order=feature_order,
+                      color="black", size=2.5, alpha=0.35, jitter=0.18, ax=ax)
+        ax.invert_yaxis()
+        ax.set_title(f"{class_name}: Distribution of Feature Rankings")
+        ax.set_xlabel("feature")
+        ax.set_ylabel("SHAP rank (1 = most important)")
+        ax.tick_params(axis="x", rotation=75)
+        _save(fig, out_path / f"ba_feature_ranking_{slug}.png")
+        plt.close(fig)
+
+
+def plot_paper_summary(run_dir: str | Path, out_dir: str | Path | None = None, top_n: int = 8) -> None:
+    """Only four compact per-run diagnostics; heavy feature scatter plots are omitted."""
+    plt, sns = _setup_matplotlib()
+    run_path = Path(run_dir)
+    out_path = Path(out_dir) if out_dir else run_path / "plots"
+    sample = _optional_csv(run_path, "sample_disagreement.csv")
+    if sample is not None and "conflict_ratio" in sample:
+        fig, ax = plt.subplots(figsize=(6, 4))
+        sns.histplot(data=sample, x="conflict_ratio", bins=24, ax=ax)
+        ax.set(title="Prediction conflict", xlabel="Conflict ratio")
+        _save(fig, out_path / "conflict_ratio.png")
+        plt.close(fig)
+    factors = _optional_csv(run_path, "disagreement_by_factor.csv")
+    if factors is not None and not factors.empty:
+        fig, ax = plt.subplots(figsize=(7, 4))
+        sns.barplot(data=factors, x="source_factor", y="mean_disagreement_rate", ax=ax)
+        ax.tick_params(axis="x", rotation=20)
+        ax.set(title="Prediction disagreement by factor", xlabel="Source", ylabel="Disagreement")
+        _save(fig, out_path / "disagreement_by_factor.png")
+        plt.close(fig)
+    plot_explanation_disagreement(run_dir, out_dir)
+    plot_ba_feature_rankings_from_summary(run_dir, out_dir, top_n=top_n)
+
+
 def plot_all(
     run_dir: str | Path,
     out_dir: str | Path | None = None,
     top_n: int = 20,
     paper_dir: str | Path | None = None,
+    profile: str = "paper",
 ) -> None:
-    plot_metrics(run_dir, out_dir)
-    plot_decision_disagreement(run_dir, out_dir)
-    plot_shap(run_dir, out_dir, top_n=top_n)
-    plot_explanation_disagreement(run_dir, out_dir)
-    plot_shap_variability(run_dir, out_dir, top_n=top_n)
-    export_paper_figures(run_dir, out_dir=out_dir, paper_dir=paper_dir)
+    if profile == "none":
+        return
+    if profile == "paper":
+        plot_paper_summary(run_dir, out_dir, top_n=top_n)
+    elif profile == "rankings":
+        plot_ba_feature_rankings_from_summary(run_dir, out_dir, top_n=top_n)
+    elif profile == "full":
+        plot_metrics(run_dir, out_dir)
+        plot_decision_disagreement(run_dir, out_dir)
+        plot_shap(run_dir, out_dir, top_n=top_n)
+        plot_explanation_disagreement(run_dir, out_dir)
+        plot_shap_variability(run_dir, out_dir, top_n=top_n)
+    else:
+        raise ValueError(f"Unknown plot profile {profile!r}")
+    # Never export/overwrite the paper figures folder implicitly across origins.
+    if paper_dir is not None:
+        export_paper_figures(run_dir, out_dir=out_dir, paper_dir=paper_dir)

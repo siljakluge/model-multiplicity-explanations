@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from itertools import combinations
+import math
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +21,10 @@ def _spearman(x: pd.Series, y: pd.Series) -> float:
     return float(x.rank().corr(y.rank()))
 
 
-def compute_explanation_disagreement(run_dir: str | Path, top_k: int = 20) -> None:
+def compute_explanation_disagreement(
+    run_dir: str | Path, top_k: int | None = None,
+    top_fraction: float = 0.10, min_k: int = 3,
+) -> None:
     run_path = Path(run_dir)
     summary_path = run_path / "shap_summary.csv"
     if not summary_path.exists():
@@ -37,6 +41,19 @@ def compute_explanation_disagreement(run_dir: str | Path, top_k: int = 20) -> No
     summary = summary[summary["model_id"].astype(str).isin(selected_models)].copy()
     if summary.empty:
         raise ValueError("shap_summary.csv contains no validation-selected Rashomon models. Re-run `mmcyber shap`.")
+    # All features, not just the truncated top-50 SHAP summary rows.
+    features_path = run_path / "feature_names.csv"
+    if not features_path.exists():
+        raise FileNotFoundError(f"Missing feature inventory: {features_path}")
+    n_features = len(pd.read_csv(features_path))
+    if n_features < 2:
+        raise ValueError("Top-k Jaccard requires at least two features")
+    if not 0.0 < top_fraction <= 1.0:
+        raise ValueError("top_fraction must be in (0, 1]")
+    if min_k < 1 or (top_k is not None and top_k < 1):
+        raise ValueError("top_k/min_k must be positive")
+    effective_k = min(n_features - 1, top_k if top_k is not None
+                      else max(min_k, math.ceil(top_fraction * n_features)))
     rows = []
 
     for class_name, class_frame in summary.groupby("class_name"):
@@ -45,7 +62,7 @@ def compute_explanation_disagreement(run_dir: str | Path, top_k: int = 20) -> No
         for model_id, model_frame in class_frame.groupby("model_id"):
             vector = model_frame.set_index("feature")["mean_abs_shap"]
             vectors[model_id] = vector
-            top_features[model_id] = set(model_frame.nsmallest(top_k, "rank")["feature"])
+            top_features[model_id] = set(model_frame.nsmallest(effective_k, "rank")["feature"])
 
         # Align SHAP importance vectors on the union of features so cosine
         # distance is not biased by features missing from one model's top list.
@@ -61,7 +78,7 @@ def compute_explanation_disagreement(run_dir: str | Path, top_k: int = 20) -> No
                     "model_a": model_a,
                     "model_b": model_b,
                     "mean_abs_shap_cosine_distance": _cosine_distance(a, b),
-                    "top_k": top_k,
+                    "top_k": effective_k,
                     "top_k_jaccard": float(intersection / union) if union else 1.0,
                 }
             )

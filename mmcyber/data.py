@@ -15,11 +15,9 @@ from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
-NSL_KDD_TRAIN_URL = "https://raw.githubusercontent.com/defcom17/NSL_KDD/master/KDDTrain%2B.txt"
-NSL_KDD_TEST_URL = "https://raw.githubusercontent.com/defcom17/NSL_KDD/master/KDDTest%2B.txt"
 ADULT_TRAIN_URL = "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"
 ADULT_TEST_URL = "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.test"
 BANK_MARKETING_ZIP_URL = "https://archive.ics.uci.edu/ml/machine-learning-databases/00222/bank.zip"
@@ -30,53 +28,6 @@ ADULT_COLUMNS = [
     "hours_per_week", "native_country", "income",
 ]
 ADULT_NUMERIC_COLUMNS = ["age", "fnlwgt", "education_num", "capital_gain", "capital_loss", "hours_per_week"]
-
-NSL_KDD_COLUMNS = [
-    "duration",
-    "protocol_type",
-    "service",
-    "flag",
-    "src_bytes",
-    "dst_bytes",
-    "land",
-    "wrong_fragment",
-    "urgent",
-    "hot",
-    "num_failed_logins",
-    "logged_in",
-    "num_compromised",
-    "root_shell",
-    "su_attempted",
-    "num_root",
-    "num_file_creations",
-    "num_shells",
-    "num_access_files",
-    "num_outbound_cmds",
-    "is_host_login",
-    "is_guest_login",
-    "count",
-    "srv_count",
-    "serror_rate",
-    "srv_serror_rate",
-    "rerror_rate",
-    "srv_rerror_rate",
-    "same_srv_rate",
-    "diff_srv_rate",
-    "srv_diff_host_rate",
-    "dst_host_count",
-    "dst_host_srv_count",
-    "dst_host_same_srv_rate",
-    "dst_host_diff_srv_rate",
-    "dst_host_same_src_port_rate",
-    "dst_host_srv_diff_host_rate",
-    "dst_host_serror_rate",
-    "dst_host_srv_serror_rate",
-    "dst_host_rerror_rate",
-    "dst_host_srv_rerror_rate",
-    "label",
-    "difficulty",
-]
-
 
 @dataclass
 class PreparedData:
@@ -89,17 +40,6 @@ class PreparedData:
     feature_names: list[str]
     class_names: list[str]
     preprocessor: Any
-
-
-def download_nsl_kdd(raw_dir: Path) -> tuple[Path, Path]:
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    train_path = raw_dir / "KDDTrain+.txt"
-    test_path = raw_dir / "KDDTest+.txt"
-    if not train_path.exists():
-        _download(NSL_KDD_TRAIN_URL, train_path)
-    if not test_path.exists():
-        _download(NSL_KDD_TEST_URL, test_path)
-    return train_path, test_path
 
 
 def _download(url: str, destination: Path) -> None:
@@ -148,28 +88,6 @@ def download_bank_marketing(raw_dir: Path) -> Path:
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"Cached file {zip_path} is not a valid UCI Bank Marketing archive.") from exc
     return csv_path
-
-
-def _read_nsl_kdd(path: Path) -> pd.DataFrame:
-    return pd.read_csv(path, names=NSL_KDD_COLUMNS)
-
-
-def _target(
-    df: pd.DataFrame,
-    task: str,
-    encoder: LabelEncoder | None = None,
-) -> tuple[np.ndarray, list[str], LabelEncoder | None]:
-    if task == "binary":
-        y = (df["label"] != "normal").astype(int).to_numpy()
-        return y, ["normal", "attack"], None
-    if task == "multiclass":
-        if encoder is None:
-            encoder = LabelEncoder()
-            y = encoder.fit_transform(df["label"])
-        else:
-            y = encoder.transform(df["label"])
-        return y, encoder.classes_.tolist(), encoder
-    raise ValueError(f"Unsupported task: {task}")
 
 
 def _save_preprocessor_artifacts(run_dir: Path, preprocessor: Any, feature_names: list[str]) -> None:
@@ -283,57 +201,6 @@ def _prepare_bank_marketing(dataset_config: dict, run_dir: Path) -> PreparedData
     _save_preprocessor_artifacts(run_dir, preprocessor, feature_names)
     return PreparedData(x_train, x_val, x_test, y_train.astype(np.int64), y_val.astype(np.int64),
                         y_test.astype(np.int64), feature_names, ["no", "yes"], preprocessor)
-
-
-def _prepare_nsl_kdd(dataset_config: dict, run_dir: Path) -> PreparedData:
-    train_path, test_path = download_nsl_kdd(Path(dataset_config["raw_dir"]))
-    train_df = _read_nsl_kdd(train_path)
-    test_df = _read_nsl_kdd(test_path)
-
-    task = dataset_config.get("task", "binary")
-    if task == "multiclass":
-        encoder = LabelEncoder().fit(pd.concat([train_df["label"], test_df["label"]], ignore_index=True))
-        y_full, class_names, _ = _target(train_df, task, encoder)
-        y_test, _, _ = _target(test_df, task, encoder)
-    else:
-        y_full, class_names, _ = _target(train_df, task)
-        y_test, _, _ = _target(test_df, task)
-
-    drop_cols = ["label", "difficulty"]
-    x_full_df = train_df.drop(columns=drop_cols)
-    x_test_df = test_df.drop(columns=drop_cols)
-
-    categorical_cols = ["protocol_type", "service", "flag"]
-    numeric_cols = [column for column in x_full_df.columns if column not in categorical_cols]
-
-    x_train_df, x_val_df, y_train, y_val = train_test_split(
-        x_full_df,
-        y_full,
-        test_size=dataset_config.get("test_size", 0.2),
-        random_state=int(dataset_config.get("split_seed", 42)),
-        stratify=y_full,
-    )
-
-    x_train, x_val, x_test, feature_names, preprocessor = _fit_and_transform(
-        x_train_df=x_train_df,
-        x_val_df=x_val_df,
-        x_test_df=x_test_df,
-        numeric_cols=numeric_cols,
-        categorical_cols=categorical_cols,
-    )
-
-    _save_preprocessor_artifacts(run_dir, preprocessor, feature_names)
-    return PreparedData(
-        x_train=x_train,
-        x_val=x_val,
-        x_test=x_test,
-        y_train=y_train.astype(np.int64),
-        y_val=y_val.astype(np.int64),
-        y_test=y_test.astype(np.int64),
-        feature_names=feature_names,
-        class_names=class_names,
-        preprocessor=preprocessor,
-    )
 
 
 def _load_folktables_problem(problem_name: str):
@@ -456,14 +323,15 @@ def _prepare_folktables(dataset_config: dict, run_dir: Path) -> PreparedData:
 def prepare_dataset(config: dict, run_dir: Path) -> PreparedData:
     dataset_config = config["dataset"]
     dataset_name = str(dataset_config["name"])
-    if dataset_name == "nsl_kdd":
-        return _prepare_nsl_kdd(dataset_config, run_dir)
     if dataset_name == "adult":
         return _prepare_adult(dataset_config, run_dir)
     if dataset_name == "bank_marketing":
         return _prepare_bank_marketing(dataset_config, run_dir)
     if dataset_name == "folktables":
         return _prepare_folktables(dataset_config, run_dir)
+    from mmcyber.extra_datasets import PREPARERS
+    if dataset_name in PREPARERS:
+        return PREPARERS[dataset_name](dataset_config, run_dir)
     raise ValueError(f"Unsupported dataset.name={dataset_name!r}")
 
 

@@ -91,7 +91,7 @@ class ReliabilityTests(unittest.TestCase):
             self.assertFalse(np.isnan(first.x_train).any())
 
     def test_new_full_configs_have_ten_origins_and_63_models(self):
-        for filename, dataset_name in [("adult_full.yaml", "adult"), ("bank_marketing_full.yaml", "bank_marketing")]:
+        for filename, dataset_name in [("adult_full.yaml", "adult"), ("bank_marketing_full.yaml", "bank_marketing"), ("compas_full.yaml", "compas"), ("german_credit_full.yaml", "german_credit"), ("taiwan_credit_full.yaml", "taiwan_credit"), ("breast_cancer_full.yaml", "breast_cancer")]:
             config = yaml.safe_load(Path("configs", filename).read_text(encoding="utf-8"))
             self.assertEqual(config["dataset"]["name"], dataset_name)
             self.assertEqual(config["training"]["origin_seeds"], list(range(1, 11)))
@@ -107,9 +107,9 @@ class ReliabilityTests(unittest.TestCase):
         with patch("mmcyber.preflight.prepare_dataset", return_value=prepared) as prepare:
             self.assertEqual(
                 preflight_full_configs(FULL_CONFIGS),
-                ["nsl_kdd", "ACSIncome", "ACSEmployment", "adult", "bank_marketing"],
+                ["ACSIncome", "ACSEmployment", "adult", "bank_marketing", "compas", "german_credit", "taiwan_credit", "breast_cancer"],
             )
-        self.assertEqual(prepare.call_count, 5)
+        self.assertEqual(prepare.call_count, 8)
 
     def test_validation_rashomon_selection_and_aggregation(self):
         with tempfile.TemporaryDirectory() as tmp:
